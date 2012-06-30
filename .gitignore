@@ -1,12 +1,360 @@
-# Compiled Object files
-*.slo
-*.lo
-*.o
+/*
+ *  cluster.cpp
+ *  Untitled
+ *
+ *  Created by Wei Han on 6/26/12.
+ *  Copyright 2012 Univ of Illinois. All rights reserved.
+ *
+ */
+#include <iostream>
+#include <cstdlib>
+#include <vector>
+#include "pthread.h"
+#include "string.h"
+#include "cluster_nt.h"
+#include "time.h"
 
-# Compiled Dynamic libraries
-*.so
 
-# Compiled Static libraries
-*.lai
-*.la
-*.a
+void * nk_comp (void *arg)
+{
+  
+	struct node_thread * thr_data = (struct node_thread *) arg;
+	int ncluster = thr_data->km->ncluster;
+	int st_idx = thr_data->st_idx;
+	int n_idx = thr_data->n_idx;
+	int * cid =thr_data->km->cluster_id;
+	int * n2c =thr_data->km->node_2_cluster + st_idx;
+	float *mdist = thr_data->km->mindist + st_idx;
+	kmedoid * km = thr_data->km;
+	kmedoid * mt = thr_data->method;
+	register int cidx;
+	register float d;
+	int lastper =-1;
+	register int i,j;
+	
+	for (j=0;j<n_idx;j++)
+	{
+		if (st_idx==0)
+		{
+			if ((int)(j*100/n_idx)>lastper) 
+			{
+				lastper=(j*100/n_idx);
+				std::cout<<lastper<<"%\n";
+			}	
+		}
+		
+		if (n2c[j]!=-2)
+		{
+			mt->stateA(j+st_idx);
+			
+			
+			for (i=0;i<ncluster;i++)
+			{
+				cidx = cid[i];
+				mt->stateB(cidx);
+				d= mt->dist();
+				if (d<mdist[j])
+				{
+					n2c[j]=cidx;
+					mdist[j]=d;
+				}
+				
+			}
+			
+			
+			
+		}
+	}
+	
+	
+	
+	
+	
+	
+	
+	pthread_exit(NULL);
+}
+
+
+void kmedoid::cluster ()
+{
+	//srand(time(NULL));
+	double randscale = 1./(float)RAND_MAX;
+	register int i,j,k;
+	int *n2c = node_2_cluster;
+	int *cid = cluster_id;
+	
+	float *mindist_new = new float [nnode]; 
+	int *n2c_new = new int [nnode];
+	//std::cout<<"Hi\n";
+	if (!mindist||!mindist_new||!n2c_new) {std::cout<<"No mem for mindist array in k-medoid cluster method.\n";exit(1);}
+	for (i=0;i<nnode;i++) {mindist[i]=maxdist();};
+	for (i=0;i<ncluster;i++)
+		cluster_id[i]=-1;
+	for (i=0;i<nnode;i++)
+		node_2_cluster[i]=-1; //-1 not asigned -2 chosen as medoid other 0..k as idx of node
+	//first iter efine mindist, select random k medoids
+	//populate cluster id and node_2_cluster
+	for (i=0;i<ncluster;)
+	{
+		int ridx=(int)(rand()*randscale*nnode);
+		if (ridx>=nnode) continue;
+		if (n2c[ridx]==-2) continue;
+		n2c[ridx]=-2;
+		cid[i]=ridx;
+		i++;
+	}
+	
+	register int cidx;
+	register float d;
+	int lastper=-1;
+
+        std::cout<<"Phase 1:\n";
+	int node_per_thr = nnode/nthread;
+	int n_thr_pp = nnode%nthread;
+	
+	pthread_t *thrs = new pthread_t [nthread];
+	struct node_thread *thr_data = new struct node_thread [nthread];
+	if (!thrs||!thr_data) {std::cout<<"No mem for threads.\n";exit(1);}
+	j=0;
+	for (i=0;i<nthread;i++)
+	{
+		//init thread
+		
+		//init thread data
+		thr_data[i].st_idx = j;
+		thr_data[i].n_idx = i< n_thr_pp ? node_per_thr +1 : node_per_thr;
+		j+=(i< n_thr_pp ? node_per_thr +1 : node_per_thr);
+		thr_data[i].km = this;
+		//get_new is critical, when using stateA or stateB, they can only handle one node at one time
+		//if multiple threads use them, there ill be racing conditions
+		//so we need a temperary obj for each thread which do the same thing as stateA and stateB but dont 
+		//need more mem for nodes,
+		//this could be either derived or base class but in virtual function its type is recasted as void *
+		//leaving its interpretation to derived class
+		//in derived class, get_new create a temp obj for stateA and stateB, return its pointer which is recasted as
+		// void *, again. In the parent class, this pointer is recasted into base class type, because it is dynamic 
+		//casting, the late binding method stateA or stateB can still be used
+		thr_data[i].method = (class kmedoid *) get_new();
+	}
+	//for nthr
+	// n_thr_pp threads have node_per_thr + 1 nodes per thread
+	// nthread- n_thr_pp threads have node_per_thr nodes per thread
+	
+	
+//need to thread
+#if 1
+	for (i=0;i<nthread;i++)
+	{
+		int ret;
+		ret = pthread_create(&(thrs[i]), NULL, nk_comp, (void *) &(thr_data[i]));
+		if(ret != 0) {
+			std::cout<<i<<" thread fial to create.\n";
+			exit(1);
+        }
+	}
+	
+	for (i=0;i<nthread;i++)
+	{
+		void * ret_join;
+		int ret;
+		ret = pthread_join(thrs[i], &ret_join);
+        if(ret != 0) {
+			std::cout<<i<<" thread fial to join.\n";
+			exit(1);
+        }
+	}
+#else
+	for (i=0;i<ncluster;i++)
+	
+	{
+//std::cout<<i*100/ncluster<<"\n";
+		if ((int)(i*100/ncluster)>lastper) 
+                 {
+                    lastper=(i*100/ncluster);
+                     std::cout<<lastper<<"%\n";
+                 }	
+	
+		cidx = cid[i];
+		stateA(cidx);
+
+		for (j=0;j<nnode;j++)
+			if (n2c[j]!=-2)
+			{
+				stateB(j);
+				d = dist();
+				if (d<mindist[j])
+				{
+					n2c[j]=cidx;
+					mindist[j]=d;
+				}
+			}
+		
+	}
+#endif
+	
+//	for (i=0;i<nnode;i++)
+//		printf("%d %f\n",i,mindist[i]);
+	
+     std::cout<<"Phase 2:\n";
+       //exit(1);
+	//std::cout<<"\n";
+	double cost_tot, cost_new;
+	cost_tot = 0.;
+	//cal overall cost
+	for (i=0;i<nnode;i++)
+		if (n2c[i]!=-2) cost_tot+=mindist[i];
+	for (i=0;i<nnode;i++) mindist_new[i]=mindist[i];
+	
+	int cnt = 0;
+        lastper=-1;
+	register int n2c_rp,n2c_a,ridx_c, ridx_n, ridx_rp;
+	register float minrp,min_a;
+	//std::cout<<cost_tot<<"\n";
+	while (cnt<reptime)
+	{
+#if 1
+		if ((int)(cnt*100/reptime)>lastper) 
+                 {
+                    lastper=(cnt*100/reptime);
+                     std::cout<<lastper<<"%\n";
+                 }		
+#endif
+		//iteration
+
+		//random replace
+		
+		while (1)
+		{
+			ridx_c=(int)(rand()*randscale*ncluster);
+			if (ridx_c<ncluster) break;
+		}
+		while (1)
+		{
+			ridx_n=(int)(rand()*randscale*nnode);
+			if (ridx_n<nnode&&n2c[ridx_n]!=-2) break;
+		}
+		ridx_rp = cid[ridx_c];
+		
+		//cal new cost
+		
+		cost_new = cost_tot; //cost_tot is calculated from current configuration
+		//remove non-metoid ridx_n
+		cost_new -= mindist [ridx_n];
+		//add ridx_rp as new non-medoid
+		stateA(ridx_rp);
+		stateB(ridx_n);
+		minrp = dist();
+		n2c_rp = ridx_n;
+		for (i=0;i<ncluster;i++)
+		{
+			cidx = cid[i];
+			if (cidx==ridx_rp) continue;
+			stateB(cidx);
+			d = dist();
+			if (d<minrp)
+			{
+				minrp=d;
+				n2c_rp = cidx;
+			}
+		}
+		cost_new += minrp;
+		//std::cout<<"hi\n";
+		//check all the other non-medoid
+		
+		for (i=0;i<nnode;i++)
+			if (n2c[i]!=-2&&i!=ridx_n&&i!=ridx_rp)
+			{
+				stateA(i);
+				//non-medoid whose medoid has been replaced
+				if (n2c[i]==ridx_rp)
+				{
+					cost_new -= mindist[i];
+					
+					stateB(ridx_n);
+					min_a = dist();
+					n2c_a = ridx_n;
+					for (j=0;j<ncluster;j++)
+					{
+						cidx = cid[j];
+						if (cidx==ridx_rp) continue;
+						stateB(cidx);
+						d = dist();
+						if (d<min_a)
+						{
+							min_a=d;
+							n2c_a = cidx;
+						}
+					}
+					
+					mindist_new[i] = min_a;
+					n2c_new[i] = n2c_a;
+					
+					cost_new+= min_a;
+					
+				}
+				else //otherwise
+				{
+					stateB(ridx_n);
+					min_a = dist();
+					n2c_a = ridx_n;
+					if (min_a<mindist[i])
+					{
+						mindist_new[i]=min_a;
+						n2c_new[i] = n2c_a;
+						cost_new +=(min_a - mindist[i]);
+					}
+					else
+					{
+						mindist_new[i]=mindist[i];
+						n2c_new[i]=n2c[i];
+					}
+				}
+			}
+		
+		
+		if (cost_new>cost_tot)
+		{
+			//std::cout<<"Converged after "<<cnt+1<<" cycles\n";
+			cnt++;continue;
+		}
+		 
+#if 0		
+		std::cout<<cost_tot<<" "<<cost_new<<"\n";
+#endif	
+		
+		
+		//new move is better than old, finish move
+		cost_tot = cost_new;
+		//replace cluster
+		cid[ridx_c] = ridx_n;
+		n2c[ridx_n] = -2;
+		
+		mindist[ridx_rp] = minrp;
+		n2c[ridx_rp] = n2c_rp;
+		
+		//update all other non medoid
+		for (i=0;i<nnode;i++)
+			if (n2c[i]!=-2&&i!=ridx_rp)
+			{
+				mindist[i]=mindist_new[i];
+				n2c[i] = n2c_new[i];
+			}
+	//	cost_new=0.;
+	//	for (i=0;i<nnode;i++)
+	//		if (n2c[i]!=-2) cost_new+=mindist[i];
+	//	std::cout<<cost_new<<"\n";
+		
+		cnt++;
+	}
+//std::cout<<"\n";	
+
+	for (i=0;i<nthread;i++) delete thr_data[i].method;
+	
+	delete [] mindist_new;
+	delete [] n2c_new;
+	delete [] thrs;
+	delete [] thr_data;
+}
+
+
